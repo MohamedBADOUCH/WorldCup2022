@@ -1,0 +1,364 @@
+---
+title: "World Cup 2022"
+output:
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r, echo=FALSE}
+library(dplyr)
+library(skimr)
+library(plotly)
+library(scales)
+library(corrplot)
+library(tidyverse)
+library(gganimate)
+
+```
+
+The world cup 2022 will be hosted by Qatar in 2022. We wanted to try and predict
+which country has the biggest probability of winning the tournament by using supervised learning.
+
+# 1. Data
+
+The data that we will be using is already cleaned and does not require pre-processing.
+
+The data set provides a complete overview of all international football matches played since the 90s. On top of that, the strength of each team is provided by incorporating the FIFA rankings as well as player strengths based on the EA Sport FIFA video game. It is available on [kaggle](https://www.kaggle.com/datasets/brenda89/fifa-world-cup-2022)
+
+## Variables
+
+- `date` : date of the match
+- `home_team` : name of the home team
+- `away_team` : name of the away team
+- `home_team_continent` : continent of the home team
+- `away_team_continent` : continent of the away team
+- `home_team_fifa_rank` : FIFA rank of the home team when the match took place
+- `away_team_fifa_rank` : FIFA rank of the away team when the match took place
+- `home_team_total_fifa_points` : total number of FIFA points of the home team at the time of the match
+- `away_team_total_fifa_points` : total number of FIFA points of the away team at the time of the match
+- `home_team_score` : full-time home score (excluding penalty shootout)
+- `away_team_score` : full-time away score (excluding penalty shootout)
+- `tournament` : name of tournament
+- `city` : name of the city where the match was played
+- `country` : name of the country where the match was played
+- `neutral_location` :
+  - `TRUE` : the match was played at a neutral venue
+- `shoot_out`:
+  - `TRUE` : the match included a penalty shootout
+- `home_team_result` : result of the home team (including penalty shootout)
+- `home_team_goalkeeper_score` : FIFA game score of the highest ranked GK of the home team
+- `away_team_goalkeeper_score` : FIFA game score of the highest ranked GK of the away team
+- `home_team_mean_defense_score` : Average FIFA game score of the 4 highest ranked defensive players of the home team
+- `away_team_mean_defense_score` : Average FIFA game score of the 4 highest ranked 
+defensive players of the away team
+- `home_team_mean_midfield_score` : Average FIFA game score of the 4 highest ranked midfield players of the home team
+- `away_team_mean_midfield_score` : Average FIFA game score of the 4 highest ranked midfield players of the away team
+- `home_team_mean_offense_score` : Average FIFA game score of the 3 highest ranked attacking players of the home team, including wing players
+- `away_team_mean_offense_score` : Average FIFA game score of the 3 highest ranked attacking players of the away team, including wing players
+
+# 2. EDA
+
+```{r}
+# class of each variable
+spec(input_data)
+```
+```{r}
+# summary
+skim_without_charts(input_data)
+```
+
+## Missing data
+
+```{r}
+input_data %>%
+  summarise_all(list(~is.na(.)))%>%
+  pivot_longer(everything(),
+               names_to = "variables", values_to="missing") %>%
+  count(variables, missing) %>%
+  ggplot(aes(y=variables,x=n,fill=missing))+
+  geom_col()+
+  scale_fill_manual(values=c("#A3BE8C","#EBCB8B"))+
+  theme(axis.title.y=element_blank())
+```
+
+
+## Top 5 teams in 2022
+
+```{r}
+# Get the ranking of all home teams
+home <-
+  input_data %>% 
+  select(date, home_team, home_team_fifa_rank) %>% 
+  rename(team = home_team, ranking = home_team_fifa_rank)
+
+# Get the ranking of all away teams
+away <-
+  input_data %>% 
+  select(date, away_team, away_team_fifa_rank) %>% 
+  rename(team = away_team, ranking = away_team_fifa_rank)
+
+# Combine both data frames into one
+fifa_ranking <- rbind(home, away)
+
+# Get the latest ranking of each country based on their most recent match
+latest_fifa_ranking <-
+  fifa_ranking %>% 
+  arrange(team, desc(date)) %>% 
+  group_by(team) %>% 
+  mutate(row_number = row_number(team)) %>% 
+  filter(row_number == 1) %>% 
+  select(-row_number, -date) %>% 
+  arrange(ranking)
+  
+head(latest_fifa_ranking, 10)
+```
+
+## FIFA rankings over time
+
+```{r}
+top5_list <- head(latest_fifa_ranking, 5)$team
+
+top5_ranking <-
+  fifa_ranking  %>% 
+  filter(team %in% top5_list)
+
+p <-
+  ggplot(data = top5_ranking,
+         mapping = aes(
+           x = date,
+           y = ranking,
+           group = team,
+           color = team
+         )) +
+  geom_line() +
+  scale_y_reverse() +
+  labs(
+    x = "Date",
+    y = "FIFA Ranking",
+    color = "Team",
+    title = "FIFA Rankings of the 2022 Top 5 teams"
+  )
+
+ggplotly(p)
+
+```
+
+## Teams with strongest GK
+
+```{r}
+# Gather goalkeeper data from matches
+gk_home <-
+  input_data %>% 
+  select(date, home_team, home_team_goalkeeper_score) %>% 
+  rename(team = home_team, goalkeeper_rating = home_team_goalkeeper_score)
+
+gk_away <-
+  input_data %>% 
+  select(date, away_team, away_team_goalkeeper_score) %>% 
+  rename(team = away_team, goalkeeper_rating = away_team_goalkeeper_score)
+
+gk_rating <- drop_na(rbind(gk_home, gk_away))
+
+# Get latest rating of each team's goalkeeper and show top 10
+latest_gk_rating <-
+  gk_rating %>% 
+  arrange(team, desc(date)) %>% 
+  group_by(team) %>% 
+  mutate(row_number = row_number(team)) %>% 
+  filter(row_number == 1) %>% 
+  select(-row_number, -date) %>% 
+  arrange(-goalkeeper_rating)
+
+ggplot(data = head(latest_gk_rating, 10), mapping = aes(x=goalkeeper_rating, y=reorder(team, goalkeeper_rating), label=goalkeeper_rating)) +
+  geom_col(fill="#88C0D0") +
+  geom_text(position = position_stack(vjust = 0.5)) +
+  labs(title = "Top 10 teams with the strongest goalkeeper",
+       subtitle = "Based on the highest rated goalkeeper of each team",
+       x="Goalkeeper Rating",
+       y="Country")
+```
+### Teams with strongest defense
+
+```{r}
+# Gather goalkeeper and defense data from matches
+def_home <-
+  input_data %>% 
+  select(date, home_team, home_team_goalkeeper_score, home_team_mean_defense_score) %>% 
+  rename(team = home_team, goalkeeper_rating = home_team_goalkeeper_score, mean_defense_rating = home_team_mean_defense_score)
+
+def_away <-
+  input_data %>% 
+  select(date, away_team, away_team_goalkeeper_score, away_team_mean_defense_score) %>% 
+  rename(team = away_team, goalkeeper_rating = away_team_goalkeeper_score, mean_defense_rating = away_team_mean_defense_score)
+
+def_rating <- drop_na(rbind(def_home, def_away))
+
+# Get latest combined rating of each team and show top 10
+latest_def_rating <-
+  def_rating %>% 
+  arrange(team, desc(date)) %>% 
+  mutate(total_def = goalkeeper_rating + mean_defense_rating) %>% 
+  group_by(team) %>% 
+  mutate(row_number = row_number(team)) %>% 
+  filter(row_number==1) %>% 
+  arrange(-total_def) %>% 
+  select(-row_number, -date)
+
+ggplot(data = head(latest_def_rating, 10), mapping=aes(x=total_def, y=reorder(team, total_def), label=total_def)) + 
+  geom_col(fill="#88C0D0") +
+  geom_text(position = position_stack(vjust = 0.5)) +
+  labs(title = "Top 10 teams with the strongest defense",
+       subtitle = "Based on goalkeeper and mean defense ratings",
+       x = "Total Defense Rating",
+       y = "Teams") 
+```
+
+### Teams with strongest midfield
+
+```{r}
+mid_home <-
+  input_data %>% 
+  select(date, home_team, home_team_mean_midfield_score) %>% 
+  rename(team = home_team, midfield_rating = home_team_mean_midfield_score)
+
+mid_away <-
+  input_data %>% 
+  select(date, away_team, away_team_mean_midfield_score) %>% 
+  rename(team = away_team, midfield_rating = away_team_mean_midfield_score)
+
+mid_rating <- drop_na(rbind(mid_home, mid_away))
+
+# Get latest midfield rating of each team and show top 10
+latest_mid_rating <-
+  mid_rating %>% 
+  arrange(team, desc(date)) %>% 
+  group_by(team) %>% 
+  mutate(row_number = row_number(team)) %>% 
+  filter(row_number == 1) %>% 
+  arrange(-midfield_rating) %>% 
+  select(-date, -row_number)
+
+ggplot(data = head(latest_mid_rating, 10), mapping=aes(x=midfield_rating, y=reorder(team, midfield_rating), label=midfield_rating)) + 
+  geom_col(fill= "#88C0D0") +
+  geom_text(position = position_stack(vjust = 0.5)) +
+  labs(title = "Top 10 teams with the strongest midfield",
+       subtitle = "Based on the average rating of the 4 highest rated midfield players of each team",
+       x = "Midfield Rating",
+       y = "Teams")
+```
+
+### Teams with strongest offense
+
+```{r}
+off_home <-
+  input_data %>% 
+  select(date, home_team, home_team_mean_offense_score) %>% 
+  rename(team = home_team, offense_rating = home_team_mean_offense_score)
+
+off_away <-
+  input_data %>% 
+  select(date, away_team, away_team_mean_offense_score) %>% 
+  rename(team = away_team, offense_rating = away_team_mean_offense_score)
+
+off_rating <- drop_na(rbind(off_home, off_away))
+
+# Get latest offense rating of each team and show top 10
+latest_off_rating <-
+  off_rating %>% 
+  arrange(team, desc(date)) %>% 
+  group_by(team) %>% 
+  mutate(row_number = row_number(team)) %>% 
+  filter(row_number == 1) %>% 
+  arrange(-offense_rating) %>% 
+  select(-date, -row_number)
+
+ggplot(data = head(latest_off_rating, 10), mapping=aes(x=offense_rating, y=reorder(team, offense_rating), label=offense_rating)) +
+  geom_col(fill="#88C0D0") +
+  geom_text(position = position_stack(vjust = 0.5)) +
+  labs(title="Top 10 teams with the strongest offense",
+      subtitle="Based on the average rating of the 3 highest rated offensive players of each team",
+      x="Offense Rating",
+      y="Teams")
+```
+
+## Is it better to play at home ?
+
+```{r}
+home_team_advantage <-
+  input_data %>% 
+  filter(neutral_location == FALSE) %>% 
+  count(home_team_result) %>% 
+  mutate(percentage = label_percent()(n/sum(n)))
+
+ggplot(data = home_team_advantage, mapping=aes(x="", y=n, fill=home_team_result)) +
+  geom_bar(width = 1, stat = "identity", color="white") +
+  coord_polar("y") +
+  scale_fill_manual(values = c("#EBCB8B", "#BF616A",
+                               "#A3BE8C"))
+  theme_void() +
+  labs(title = "Distribution of match results of home teams",
+       subtitle = "Excluding matches played at neutral locations",
+       fill="Result")
+```
+
+## Correlation Matrix
+
+```{r}
+# select numeric columns only
+input_numeric_data <- input_data %>%
+  select_if(is.numeric) %>%
+  drop_na()
+
+# rename variables for easier correlation plot visualization
+input_numeric_data <- input_numeric_data %>% rename(
+  rank1 = home_team_fifa_rank,
+  rank2 = away_team_fifa_rank,
+  total_fifa_points1 = home_team_total_fifa_points,
+  total_fifa_points2 = away_team_total_fifa_points,
+  score1 = home_team_score,
+  score2 = away_team_score,
+  gk_score1 = home_team_goalkeeper_score,
+  gk_score2 = away_team_goalkeeper_score,
+  df_score1 = home_team_mean_defense_score,
+  df_score2 = away_team_mean_defense_score,
+  att_score1 = home_team_mean_offense_score,
+  att_score2 = away_team_mean_offense_score,
+  mf_score1 = home_team_mean_midfield_score,
+  mf_score2 = away_team_mean_midfield_score
+)
+
+# create correlation plot
+input_numeric_data %>%
+  cor() %>%
+  corrplot(
+    type = "upper",
+    diag = FALSE,
+    col=colorRampPalette(c("firebrick","lightyellow","green4"))(100),
+    method = "shade",
+    shade.col = NA,
+    tl.col = "black",
+    tl.srt = 45
+  )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
