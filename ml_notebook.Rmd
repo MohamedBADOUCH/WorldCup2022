@@ -13,7 +13,7 @@ library(scales)
 library(corrplot)
 library(tidyverse)
 library(gganimate)
-
+library(InformationValue)
 ```
 
 The world cup 2022 will be hosted by Qatar in 2022. We wanted to try and predict
@@ -82,7 +82,7 @@ input_data %>%
 ```
 
 
-## Top 5 teams in 2022
+## Top 10 teams in 2022
 
 ```{r}
 # Get the ranking of all home teams
@@ -294,7 +294,7 @@ ggplot(data = home_team_advantage, mapping=aes(x="", y=n, fill=home_team_result)
   geom_bar(width = 1, stat = "identity", color="white") +
   coord_polar("y") +
   scale_fill_manual(values = c("#EBCB8B", "#BF616A",
-                               "#A3BE8C"))
+                               "#A3BE8C")) +
   theme_void() +
   labs(title = "Distribution of match results of home teams",
        subtitle = "Excluding matches played at neutral locations",
@@ -341,9 +341,154 @@ input_numeric_data %>%
   )
 ```
 
+# 2. Data Processing / Feature Engineering
+
+## Create new features
+
+```{r}
+output_data <- input_data
+
+output_data$rank_diff <- output_data$home_team_fifa_rank - output_data$away_team_fifa_rank
+
+output_data$average_rank <- (output_data$home_team_fifa_rank + output_data$away_team_fifa_rank)/2
+
+output_data$point_diff <- output_data$home_team_total_fifa_points - output_data$away_team_total_fifa_points
+
+output_data$score_diff <- output_data$home_team_score - output_data$away_team_score
+
+output_data$win <- output_data$score_diff > 0
+
+output_data$stake <- output_data$tournament != 'Friendly'
+```
+
+## Model
+
+```{r}
+# create training and test set
+sample <-
+  sample(c(TRUE, FALSE),
+         nrow(output_data),
+         replace = TRUE,
+         prob = c(0.7, 0.3))
+train <- output_data[sample,]
+test <- output_data[!sample,]
+
+# fit logistic regression model
+logreg <-
+  glm(win ~ average_rank + rank_diff + point_diff,
+      family = "binomial",
+      data = train)
+summary(logreg)
+
+# calc probability of win for each team in test dataset
+predicted <- predict(logreg, test, type = "response")
+
+
+# convert wins to 1 and 0
+test$win <- ifelse(test$win == TRUE, 1, 0)
+
+# find optimal cutoff probability to use to maximize accuracy
+optimal <- optimalCutoff(test$win, predicted)[1]
+optimal
+
+# confusion matrix
+confusionMatrix(test$win, predicted)
+
+# calculate miss classification error rate
+misClassError(test$win, predicted, threshold = optimal)
+
+# ROC
+plotROC(test$win, predicted)
+
+```
+
+## Test
+
+```{r}
+wc_teams <- list('Qatar', 'Ecuador', 'Senegal', 'Netherlands', 'England', 'Iran', 'USA',
+                  'Wales', 'Argentina', 'Saudi Arabia', 'Mexico', 'Poland', 'France', 
+                  'Australia', 'Denmark', 'Tunisia', 'Spain', 'Costa Rica', 'Germany', 
+                  'Japan', 'Belgium', 'Canada', 'Morocco', 'Croatia', 'Brazil', 'Serbia', 
+                  'Switzerland', 'Cameroon', 'Portugal', 'Ghana', 'Uruguay', 'South Korea')
+
+wc_rankings_home <- output_data %>% 
+  filter(date>"2013-01-01") %>% 
+  select(home_team, home_team_fifa_rank, home_team_total_fifa_points) %>% 
+  filter(home_team %in% wc_teams)
+  
+wc_rankings_away <- output_data %>% 
+  filter(date>"2013-01-01") %>% 
+  select(away_team, away_team_fifa_rank, away_team_total_fifa_points) %>% 
+  filter(away_team %in% wc_teams)
+```
+
+```{r}
+# prepare lists
+simulation_winners <- list()
+simulation_results_winners <- list()
+simulation_results_round16 <- list()
+simulation_df_round16 <- list()
+simulation_results_quarterfina <- list()
+simulation_df_quarterfinal <- list()
+simulation_results_semifina <- list()
+simulation_df_semifinal <- list()
+
+# simulations
+n = 1000
+
+# select who will come out of the group stages
+candidates <-
+  list(
+    'Senegal',
+    'Netherlands',
+    'England',
+    'USA',
+    'Argentina',
+    'Poland',
+    'France',
+    'Denmark',
+    'Spain',
+    'Germany',
+    'Belgium',
+    'Croatia',
+    'Brazil',
+    'Serbia',
+    'Portugal',
+    'Uruguay'
+  )
+finals = list('round_of_16', 'quarterfinal', 'semifinal', 'final')
+
+# simulate
+
+for (f in finals){
+  iterations <- length(candidates)/2
+  winners = list()
+  prob = list()
+  
+  for (i in range(iterations)){
+    home <- candidates[i*2]
+    away <- candidates[i*2+1]
+    
+    row <- data.frame(matrix(nrow = 0, ncol = length(colnames(test))))
+    colnames(row) <- colnames(test)
+    
+    home_rank <- wc_rankings_home %>% filter
+    
+    
+    
+    
+  }
+}
+  
 
 
 
+
+
+
+
+
+```
 
 
 
