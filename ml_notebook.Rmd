@@ -6,13 +6,13 @@ output:
 ---
 
 ```{r, echo=FALSE}
+library(rlist)
 library(dplyr)
 library(skimr)
 library(plotly)
 library(scales)
 library(corrplot)
 library(tidyverse)
-library(gganimate)
 library(InformationValue)
 ```
 
@@ -292,6 +292,7 @@ home_team_advantage <-
 
 ggplot(data = home_team_advantage, mapping=aes(x="", y=n, fill=home_team_result)) +
   geom_bar(width = 1, stat = "identity", color="white") +
+  geom_text(aes(label=paste0(percentage)), position= position_stack(vjust=0.5)) +
   coord_polar("y") +
   scale_fill_manual(values = c("#EBCB8B", "#BF616A",
                                "#A3BE8C")) +
@@ -345,156 +346,197 @@ input_numeric_data %>%
 
 ## Create new features
 
-```{r}
-output_data <- input_data
+```{python}
+import numpy as np
+import pandas as pd
 
-output_data$rank_diff <- output_data$home_team_fifa_rank - output_data$away_team_fifa_rank
 
-output_data$average_rank <- (output_data$home_team_fifa_rank + output_data$away_team_fifa_rank)/2
+df = r.input_data
+df['date'] = pd.to_datetime(df['date'])
 
-output_data$point_diff <- output_data$home_team_total_fifa_points - output_data$away_team_total_fifa_points
-
-output_data$score_diff <- output_data$home_team_score - output_data$away_team_score
-
-output_data$win <- output_data$score_diff > 0
-
-output_data$stake <- output_data$tournament != 'Friendly'
+df['rank_difference'] = df['home_team_fifa_rank'] - df['away_team_fifa_rank']
+df['average_rank'] = (df['home_team_fifa_rank'] + df['away_team_fifa_rank'])/2
+df['point_difference'] = df['home_team_total_fifa_points'] - df['away_team_total_fifa_points']
+df['score_difference'] = df['home_team_score'] - df['away_team_score']
+df['is_won'] = df['score_difference'] > 0 # take draw as lost
+df['is_stake'] = df['tournament'] != 'Friendly'
 ```
 
 ## Model
 
-```{r}
-# create training and test set
-sample <-
-  sample(c(TRUE, FALSE),
-         nrow(output_data),
-         replace = TRUE,
-         prob = c(0.7, 0.3))
-train <- output_data[sample,]
-test <- output_data[!sample,]
+```{python, echo = FALSE, message = FALSE, results='hide'}
+#!pip install matplotlib
+#!pip install seaborn
+#!pip install datetime
 
-# fit logistic regression model
-logreg <-
-  glm(win ~ average_rank + rank_diff + point_diff,
-      family = "binomial",
-      data = train)
-summary(logreg)
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-# calc probability of win for each team in test dataset
-predicted <- predict(logreg, test, type = "response")
+from sklearn import linear_model
+from sklearn import ensemble
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PolynomialFeatures
 
 
-# convert wins to 1 and 0
-test$win <- ifelse(test$win == TRUE, 1, 0)
 
-# find optimal cutoff probability to use to maximize accuracy
-optimal <- optimalCutoff(test$win, predicted)[1]
-optimal
+X, y = df.loc[:,['average_rank', 'rank_difference', 'point_difference']], df['is_won']
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42)
 
-# confusion matrix
-confusionMatrix(test$win, predicted)
+logreg = linear_model.LogisticRegression(C=1e-5)
+features = PolynomialFeatures(degree=2)
+model = Pipeline([
+    ('polynomial_features', features),
+    ('logistic_regression', logreg)
+])
+model = model.fit(X_train, y_train)
 
-# calculate miss classification error rate
-misClassError(test$win, predicted, threshold = optimal)
+# figures 
+fpr, tpr, _ = roc_curve(y_test, model.predict_proba(X_test)[:,1])
+plt.figure(figsize=(15,5))
+ax = plt.subplot(1,3,1)
+ax.plot([0, 1], [0, 1], 'k--')
+ax.plot(fpr, tpr)
+ax.set_title('AUC score is {0:0.2}'.format(roc_auc_score(y_test, model.predict_proba(X_test)[:,1])))
+ax.set_aspect(1)
 
-# ROC
-plotROC(test$win, predicted)
+ax = plt.subplot(1,3,2)
+cm = confusion_matrix(y_test, model.predict(X_test))
+ax.imshow(cm, cmap='Blues', clim = (0, cm.max())) 
+
+ax.set_xlabel('Predicted label')
+ax.set_title('Test set')
+
+ax = plt.subplot(1,3,3)
+cm = confusion_matrix(y_train, model.predict(X_train))
+ax.imshow(cm, cmap='Blues', clim = (0, cm.max())) 
+ax.set_xlabel('Predicted label')
+ax.set_title('Training set')
+
+
+plt.show()
 
 ```
 
-## Test
+## Simulation
 
-```{r}
-wc_teams <- list('Qatar', 'Ecuador', 'Senegal', 'Netherlands', 'England', 'Iran', 'USA',
+```{python}
+
+#List of all Teams in 2022 World Cup
+teams_worldcup = ['Qatar', 'Ecuador', 'Senegal', 'Netherlands', 'England', 'Iran', 'USA',
                   'Wales', 'Argentina', 'Saudi Arabia', 'Mexico', 'Poland', 'France', 
                   'Australia', 'Denmark', 'Tunisia', 'Spain', 'Costa Rica', 'Germany', 
                   'Japan', 'Belgium', 'Canada', 'Morocco', 'Croatia', 'Brazil', 'Serbia', 
-                  'Switzerland', 'Cameroon', 'Portugal', 'Ghana', 'Uruguay', 'South Korea')
+                  'Switzerland', 'Cameroon', 'Portugal', 'Ghana', 'Uruguay', 'South Korea']
 
-wc_rankings_home <- output_data %>% 
-  filter(date>"2013-01-01") %>% 
-  select(home_team, home_team_fifa_rank, home_team_total_fifa_points) %>% 
-  filter(home_team %in% wc_teams)
-  
-wc_rankings_away <- output_data %>% 
-  filter(date>"2013-01-01") %>% 
-  select(away_team, away_team_fifa_rank, away_team_total_fifa_points) %>% 
-  filter(away_team %in% wc_teams)
 ```
 
-```{r}
-# prepare lists
-simulation_winners <- list()
-simulation_results_winners <- list()
-simulation_results_round16 <- list()
-simulation_df_round16 <- list()
-simulation_results_quarterfina <- list()
-simulation_df_quarterfinal <- list()
-simulation_results_semifina <- list()
-simulation_df_semifinal <- list()
+```{python}
 
-# simulations
-n = 1000
-
-# select who will come out of the group stages
-candidates <-
-  list(
-    'Senegal',
-    'Netherlands',
-    'England',
-    'USA',
-    'Argentina',
-    'Poland',
-    'France',
-    'Denmark',
-    'Spain',
-    'Germany',
-    'Belgium',
-    'Croatia',
-    'Brazil',
-    'Serbia',
-    'Portugal',
-    'Uruguay'
-  )
-finals = list('round_of_16', 'quarterfinal', 'semifinal', 'final')
-
-# simulate
-
-for (f in finals){
-  iterations <- length(candidates)/2
-  winners = list()
-  prob = list()
-  
-  for (i in range(iterations)){
-    home <- candidates[i*2]
-    away <- candidates[i*2+1]
-    
-    row <- data.frame(matrix(nrow = 0, ncol = length(colnames(test))))
-    colnames(row) <- colnames(test)
-    
-    home_rank <- wc_rankings_home %>% filter
-    
-    
-    
-    
-  }
-}
-  
-
-
-
-
-
-
+world_cup_rankings_home = df[['home_team','home_team_fifa_rank','home_team_total_fifa_points']].loc[df['home_team'].isin(teams_worldcup) & (df['date']>'2021-01-01')]
+world_cup_rankings_away = df[['away_team','away_team_fifa_rank','away_team_total_fifa_points']].loc[df['away_team'].isin(teams_worldcup)& (df['date']>'2021-01-01')]
+world_cup_rankings_home = world_cup_rankings_home.set_index(['home_team'])
 
 
 ```
 
+```{python}
+world_cup_rankings_home = world_cup_rankings_home.groupby('home_team').mean()
+world_cup_rankings_away = world_cup_rankings_away.groupby('away_team').mean()
+```
+```{python}
+    candidates = [ 'Senegal', 'Netherlands', 'England','USA', 'Argentina', 'Poland', 'France', 'Denmark','Spain', 'Germany', 'Belgium', 'Croatia', 'Brazil', 'Serbia', 'Portugal','Uruguay']
+    finals = ['round_of_16', 'quarterfinal', 'semifinal', 'final']
+```
 
 
 
+```{python}
+from tqdm import tqdm
+
+simulation_winners = list()
+simulation_results_winners = list()
+simulation_results_round16 = list()
+simulation_df_round16 = list()
+simulation_results_quarterfinal = list()
+simulation_df_quarterfinal = list()
+simulation_results_semifinal = list()
+simulation_df_semifinal = list()
+
+n_simulations = 1000
+
+for j in tqdm(range(n_simulations)):
+  
+    for f in finals:
+        iterations = int(len(candidates) / 2)
+        winners = []
+        prob = []
+        
+        for i in range(iterations):
+            home = candidates[i*2]
+            away = candidates[i*2+1]
+            row = pd.DataFrame(np.array([[np.nan, np.nan, True]]), columns=X_test.columns)
+            home_rank = world_cup_rankings_home.loc[home, 'home_team_fifa_rank']
+            home_points = world_cup_rankings_home.loc[home, 'home_team_total_fifa_points']
+            opp_rank = world_cup_rankings_away.loc[away, 'away_team_fifa_rank']
+            opp_points = world_cup_rankings_away.loc[away, 'away_team_total_fifa_points']
+            row['average_rank'] = (home_rank + opp_rank) / 2
+            row['rank_difference'] = home_rank - opp_rank
+            row['point_difference'] = home_points - opp_points
+            home_win_prob = model.predict_proba(row)[:,1][0]
+            simulated_outcome = np.random.binomial(1, home_win_prob)
+            winners.append(away) if simulated_outcome <= 0.5 else winners.append(home)
+            prob.append(1 - simulated_outcome) if simulated_outcome <= 0.5 else prob.append(simulated_outcome)
+            
+        if f == 'round_of_16':
+            step_16 = ['round_16'] * 8
+            candidates_round_16 = zip(step_16, winners, prob)
+            df_candidates_round_16 = pd.DataFrame(candidates_round_16, columns = ['Step','Team','Prob'])
+            simulation_df_round16.append(df_candidates_round_16)
+            simulation_results_round16.append(winners)
+            
+        if f == 'quarterfinal':
+            step_quarterfinal = ['quarterfinal'] * 4
+            candidates_quarterfinal = zip(step_quarterfinal,winners, prob)
+            df_candidates_quarterfinal = pd.DataFrame(candidates_quarterfinal, columns = ['Step','Team','Prob'])
+            simulation_df_quarterfinal.append(df_candidates_quarterfinal)
+            simulation_results_quarterfinal.append(winners)
+            
+        if f == 'semifinal':    
+            step_semifinal = ['semifinal'] * 2
+            candidates_semifinal = zip(step_semifinal,winners, prob)
+            df_candidates_semifinal = pd.DataFrame(candidates_semifinal, columns = ['Step','Team','Prob'])
+            simulation_df_semifinal.append(df_candidates_semifinal)
+            simulation_results_semifinal.append(winners)
+            
+        if f == 'final':    
+            step_final = ['final'] * 1
+            candidates_final = zip(step_final,winners, prob)
+            df_candidates_final = pd.DataFrame(candidates_final, columns = ['Step','Team','Prob'])
+            simulation_winners.append(df_candidates_final)
+            simulation_results_winners.append(winners)
+            
+        list_win = list(zip(winners,prob))
+        candidates = winners 
+df_candidates_round_16 = pd.concat(simulation_df_round16)
+df_candidates_quarterfinal = pd.concat(simulation_df_quarterfinal)
+df_candidates_semifinal = pd.concat(simulation_df_semifinal)
+df_candidates_final = pd.concat(simulation_winners)
+df_results = pd.concat([df_candidates_round_16,df_candidates_quarterfinal,df_candidates_semifinal,df_candidates_final]) #final DataFrame
+simulation_results_round16 = sum(simulation_results_round16, [])
+simulation_results_quarterfinal = sum(simulation_results_quarterfinal, [])
+simulation_results_semifinal = sum(simulation_results_semifinal, [])
+simulations_winners = sum(simulation_results_winners, [])
+```
 
 
+
+```{python}
+for j in tqdm(range(n_simulations)):
+  print(j+1)
+```
 
 
 
